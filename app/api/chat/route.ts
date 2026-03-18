@@ -359,6 +359,21 @@ export async function POST(request: NextRequest) {
 
       logger.info("Making follow-up request to MiniMax with tool results");
 
+      const toolMessages = [
+        ...messages,
+        data.choices[0].message,
+      ];
+
+      for (const toolCall of toolCalls) {
+        const toolResult = toolResults.find((r) => r.name === toolCall.function.name);
+        toolMessages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          tool_name: toolCall.function.name,
+          content: JSON.stringify(toolResult?.result || { error: "No result" }),
+        });
+      }
+
       const toolResponse = await fetch(`${MINIMAX_API_BASE}/v1/text/chatcompletion_v2`, {
         method: "POST",
         headers: {
@@ -377,12 +392,7 @@ export async function POST(request: NextRequest) {
 - 用户表达"评价某位老师"时，使用 add_course_teacher_review
 - 深圳(shenzhen)支持 multi-project 操作，哈工大本部/威海(harbin/weihai)不支持`,
             },
-            ...messages,
-            data.choices[0].message,
-            {
-              role: "tool",
-              content: JSON.stringify(toolResults),
-            },
+            ...toolMessages,
           ],
         }),
       });
