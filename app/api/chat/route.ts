@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
 
 const BACKEND_URL = process.env.AGENT_BACKEND_URL || "http://localhost:8080";
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || "sk-cp-xqBXPT7PTX8CG_IMl3xnbrrVi50i1wEjBQ8AACpgDhR3wpD6BJeTsYrBt2J9CJSMy9weFfPUQHJ6DWYMXqvD6Whvszor2IZhc_jACOJXGx3QbcygaiIFgLo";
+const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const MINIMAX_API_BASE = process.env.MINIMAX_API_BASE || "https://api.minimaxi.com";
 const MINIMAX_MODEL = process.env.MINIMAX_MODEL || "MiniMax-M2.7";
 
@@ -46,12 +47,31 @@ async function invokeSkill(
   skillName: string,
   input: Record<string, unknown>
 ): Promise<SkillResponse> {
-  const res = await fetch(`${BACKEND_URL}/v1/skills/${skillName}:invoke`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input }),
-  });
-  return res.json();
+  logger.info(`Invoking skill: ${skillName}`, { input, url: `${BACKEND_URL}/v1/skills/${skillName}:invoke` });
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/v1/skills/${skillName}:invoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      logger.error(`Skill ${skillName} HTTP error`, { status: res.status, body: text });
+      return { ok: false, error: { code: "HTTP_ERROR", message: `HTTP ${res.status}: ${text}` } };
+    }
+
+    const data: SkillResponse = await res.json();
+    logger.info(`Skill ${skillName} response`, data);
+    return data;
+  } catch (error) {
+    logger.error(`Skill ${skillName} network error`, { error: String(error) });
+    return {
+      ok: false,
+      error: { code: "NETWORK_ERROR", message: error instanceof Error ? error.message : String(error) }
+    };
+  }
 }
 
 async function pollJob(
@@ -59,17 +79,26 @@ async function pollJob(
   maxAttempts = 60,
   intervalMs = 2000
 ): Promise<JobResponse> {
+  logger.info(`Polling job: ${jobId}`);
+
   for (let i = 0; i < maxAttempts; i++) {
-    const res = await fetch(`${BACKEND_URL}/v1/jobs/${jobId}`);
-    const data: JobResponse = await res.json();
+    try {
+      const res = await fetch(`${BACKEND_URL}/v1/jobs/${jobId}`);
+      const data: JobResponse = await res.json();
 
-    if (!data.ok) {
-      return data;
-    }
+      if (!data.ok) {
+        logger.error(`Job ${jobId} error`, data.error);
+        return data;
+      }
 
-    const status = data.job?.status;
-    if (status === "succeeded" || status === "failed") {
-      return data;
+      const status = data.job?.status;
+      logger.info(`Job ${jobId} status: ${status}`);
+
+      if (status === "succeeded" || status === "failed") {
+        return data;
+      }
+    } catch (error) {
+      logger.error(`Job ${jobId} poll error`, { error: String(error) });
     }
 
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -263,7 +292,13 @@ const TOOLS = {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!MINIMAX_API_KEY) {
+      logger.error("MINIMAX_API_KEY not configured");
+      return NextResponse.json({ error: "API key not configured" }, { status: 500 });
+    }
+
     const { messages } = await request.json();
+    logger.info("Chat request", { messageCount: messages?.length, lastMessage: messages?.[messages?.length - 1] });
 
     const response = await fetch(`${MINIMAX_API_BASE}/v1/text/chatcompletion_v2`, {
       method: "POST",
@@ -298,25 +333,31 @@ export async function POST(request: NextRequest) {
     });
 
     const data = await response.json();
+    logger.info("MiniMax response", data);
 
     if (data.choices?.[0]?.message?.tool_calls) {
       const toolCalls = data.choices[0].message.tool_calls;
+      logger.info("Tool calls received", { count: toolCalls.length });
+
       const toolResults: { name: string; result: unknown }[] = [];
 
       for (const toolCall of toolCalls) {
         const toolName = toolCall.function.name;
         const args = JSON.parse(toolCall.function.arguments);
+        logger.info(`Executing tool: ${toolName}`, { args });
 
         try {
           const { output } = await callSkill(toolName, args);
           toolResults.push({ name: toolName, result: output });
+          logger.info(`Tool ${toolName} success`, { output });
         } catch (error) {
-          toolResults.push({
-            name: toolName,
-            result: { error: error instanceof Error ? error.message : "Unknown error" },
-          });
+          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          toolResults.push({ name: toolName, result: { error: errorMsg } });
+          logger.error(`Tool ${toolName} failed`, { error: errorMsg });
         }
       }
+
+      logger.info("Making follow-up request to MiniMax with tool results");
 
       const toolResponse = await fetch(`${MINIMAX_API_BASE}/v1/text/chatcompletion_v2`, {
         method: "POST",
@@ -347,13 +388,16 @@ export async function POST(request: NextRequest) {
       });
 
       const finalData = await toolResponse.json();
+      logger.info("Final response", finalData);
       return NextResponse.json(finalData);
     }
 
     return NextResponse.json(data);
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+    logger.error("Chat handler error", { error: errorMsg, stack: error instanceof Error ? error.stack : undefined });
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
+      { error: errorMsg },
       { status: 500 }
     );
   }

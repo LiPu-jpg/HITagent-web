@@ -22,6 +22,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Logs
+logs/
+
 # Local env files
 .env*.local
 .env
@@ -36,3 +39,4 @@ next-env.d.ts
 # IDE
 .idea/
 .vscode/
+package-lock.json
