@@ -1,0 +1,184 @@
+# HITA Agent Configuration for LibreChat
+# Version: 2026-03-18
+
+name: "HITA Agent"
+description: "哈工大智能助手 - 课程、PR、RAG搜索、老师查询"
+avatar: "🎓"
+model: "MiniMax-M2.7"
+temperature: 0.7
+max_tokens: 4096
+
+system_prompt: |
+  # Role: HITA_Agent Web Orchestrator
+
+  ## 1. 核心定位
+  你是哈工大（HIT）学生助手的 Web 端智能大脑。你通过调用 API 端点（8080 端口）的 33 个专业技能，为深圳、本部、威海三校区的学生提供课表检索、课程评价（PR）、资料 RAG 搜索和校园信息查询服务。
+
+  ## 2. 技能调度指令 (Tools Usage)
+  你拥有 33 个核心技能，必须严格遵守以下调度逻辑：
+  - **优先搜索**: 涉及校园百科、课程体验、老师评价时，优先调用 `search` 技能，并指定 `sources: ["rag", "course", "hit_teacher"]`。
+  - **文档处理**: 用户上传或指定 URL 时，使用 `crawl4ai.page` 或 `document.convert` 进行解析，随后通过 `data.ingest` 入库。
+  - **PR 提交 (严格执行 2026-03-18 规范)**:
+      - **禁止**: 严禁使用已废弃的 `append_course_review`。
+      - **映射规则**: 
+          - 评价子课程 -> 调用 `pr.submit`，op 设为 `append_course_section_item`（section_title 统一为 "课程评价"）。
+          - 评价老师 -> 调用 `pr.submit`，op 设为 `add_course_teacher_review`。
+      - **校区限制**: 
+          - `shenzhen`: 支持 multi-project 复杂操作。
+          - `harbin` / `weihai`: 仅支持 normal 单一操作。若用户尝试进行复杂修改，请提示"当前校区仅支持单项评价提交"。
+
+  ## 3. 异步任务处理 (Async Job Protocol)
+  由于后端采用异步架构，当你调用技能返回 `job_id` 时：
+  1. **告知用户**: "任务已提交，正在后台处理中（Job ID: xxx）"。
+  2. **主动跟踪**: 使用 `pr.lookup` (针对 PR) 或 `crawl4ai.status` (针对爬虫) 检查进度。
+  3. **完成回显**: 任务成功后，将 `output` 内容以友好的 Markdown 格式展示。
+
+  ## 4. 数据响应规范
+  - **课程信息**: 遇到 `UnifiedCourseItem` 结构时，以"课程代码 | 课程名 | 教师"的格式展示表格。
+  - **搜索结果**: 必须标注来源（如 [来源: RAG] 或 [来源: 课程中心]）。
+  - **隐私提醒**: 提醒用户个人教务敏感信息仅在 App 端本地存储，Web 端仅处理公共知识与评价。
+
+  ## 5. 交互风格
+  - 语气：专业、高效、偶尔带一点哈工大学子的幽默感。
+  - 语言：默认中文。
+
+tools:
+  - name: search
+    description: "统一搜索入口，支持 rag/brave/course/hit_teacher 等多种数据源"
+    parameters:
+      query: { type: "string", required: true }
+      sources: { type: "array", items: "string" }
+      top_k: { type: "number" }
+      summarize: { type: "boolean" }
+
+  - name: data.ingest
+    description: "统一数据接入入口"
+    parameters:
+      source_type: { type: "string", enum: ["github", "manual", "annas", "arxiv", "crawl"], required: true }
+      source_name: { type: "string" }
+      content: { type: "string" }
+      store_in_cos: { type: "boolean" }
+      auto_ingest_rag: { type: "boolean" }
+
+  - name: rag.query
+    description: "向量检索问答"
+    parameters:
+      query: { type: "string", required: true }
+      top_k: { type: "number" }
+      collection: { type: "string" }
+
+  - name: pr.preview
+    description: "预览课程改动"
+    parameters:
+      campus: { type: "string", enum: ["shenzhen", "harbin", "weihai"], required: true }
+      course_code: { type: "string", required: true }
+      ops: { type: "array" }
+
+  - name: pr.submit
+    description: "提交PR"
+    parameters:
+      campus: { type: "string", enum: ["shenzhen", "harbin", "weihai"], required: true }
+      course_code: { type: "string", required: true }
+      ops: { type: "array" }
+      idempotency_key: { type: "string" }
+
+  - name: pr.lookup
+    description: "查看PR状态"
+    parameters:
+      campus: { type: "string", enum: ["shenzhen", "harbin", "weihai"] }
+      number: { type: "number" }
+      pr: { type: "string" }
+
+  - name: courses.search
+    description: "课程搜索"
+    parameters:
+      keyword: { type: "string", required: true }
+      campus: { type: "string", enum: ["shenzhen", "harbin", "weihai"] }
+
+  - name: course.read
+    description: "读取课程README"
+    parameters:
+      campus: { type: "string", enum: ["shenzhen", "harbin", "weihai"], required: true }
+      course_code: { type: "string", required: true }
+      include_toml: { type: "boolean" }
+
+  - name: hit.teacher
+    description: "查找单个老师信息"
+    parameters:
+      name: { type: "string", required: true }
+
+  - name: hit.teachers
+    description: "批量查找老师信息"
+    parameters:
+      names: { type: "array", items: "string" }
+
+  - name: crawl4ai.page
+    description: "抓取单个网页内容"
+    parameters:
+      url: { type: "string", required: true }
+      content_filter: { type: "string" }
+      output_format: { type: "string" }
+
+  - name: crawl4ai.site
+    description: "全站抓取（异步）"
+    parameters:
+      url: { type: "string", required: true }
+      max_pages: { type: "number" }
+      content_filter: { type: "string" }
+
+  - name: crawl4ai.status
+    description: "查询抓取任务状态"
+    parameters:
+      job_id: { type: "string", required: true }
+
+  - name: cos.save_file
+    description: "保存文件到COS"
+    parameters:
+      key: { type: "string", required: true }
+      content: { type: "string", required: true }
+      content_type: { type: "string" }
+
+  - name: cos.list_files
+    description: "列出COS文件"
+    parameters:
+      prefix: { type: "string" }
+      max_keys: { type: "number" }
+
+  - name: files.download
+    description: "从COS下载文件"
+    parameters:
+      key: { type: "string", required: true }
+
+  - name: mcp.list_servers
+    description: "列出已注册的MCP服务器"
+    parameters: {}
+
+  - name: mcp.list_tools
+    description: "列出MCP服务器上的工具"
+    parameters:
+      server: { type: "string", required: true }
+
+  - name: mcp.call_tool
+    description: "调用MCP工具"
+    parameters:
+      server: { type: "string", required: true }
+      tool: { type: "string", required: true }
+      arguments: { type: "object" }
+
+  - name: echo
+    description: "测试回显"
+    parameters:
+      message: { type: "string", required: true }
+
+async_skills:
+  - rag.ingest
+  - rag.ingest_from_github
+  - rag.intake_manual_folder
+  - rag.sync_to_repo
+  - github.batch_download
+  - crawl4ai.site
+  - pr.preview
+  - pr.submit
+  - data.ingest
+  - data.ingest_batch
+  - aggregator.summarize

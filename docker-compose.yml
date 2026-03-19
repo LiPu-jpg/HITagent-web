@@ -1,0 +1,46 @@
+version: '3.4'
+
+services:
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: hita-librechat
+    ports:
+      - "3080:3080"
+    environment:
+      - NODE_ENV=production
+      - PORT=3080
+      - MONGO_URI=mongodb://mongo:27017/librechat
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_MASTER_KEY=librechat_master_key
+      - RAG_API=http://host.docker.internal:8080
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimaxi.com}
+      - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
+      - AGENT_BACKEND_URL=http://host.docker.internal:8080
+    volumes:
+      - ./hita-agent-config.yaml:/app/client/src/config/agent.yaml:ro
+      - ./librechat_data:/app/client/public/uploads
+    depends_on:
+      - mongo
+      - meilisearch
+    network_mode: host
+
+  mongo:
+    image: mongo:7
+    container_name: hita-mongo
+    volumes:
+      - mongo_data:/data/db
+    network_mode: host
+
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: hita-meilisearch
+    environment:
+      - MEILI_MASTER_KEY=librechat_master_key
+    volumes:
+      - meilisearch_data:/meili_data
+    network_mode: host
+
+volumes:
+  mongo_data:
+  meilisearch_data:

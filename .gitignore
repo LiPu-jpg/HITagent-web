@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# LibreChat
+.data/
+librechat_data/
+meilisearch_data/
+mongo_data/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+*.pem
+
+# IDE
+.idea/
+.vscode/
