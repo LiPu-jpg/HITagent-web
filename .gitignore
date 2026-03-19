@@ -9,6 +9,11 @@ librechat_data/
 meilisearch_data/
 mongo_data/
 
+# Next.js
+.next/
+out/
+build/
+
 # Environment
 .env
 .env.local
@@ -25,3 +30,7 @@ logs/
 # IDE
 .idea/
 .vscode/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
